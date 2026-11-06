@@ -1,9 +1,10 @@
-﻿import { readdir, readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import 'dotenv/config';
 import { runSeeds } from './seed.mjs';
+import { runSeedAdmin } from './seed-admin.mjs';
 import { protectExistingRecords } from './protect-existing-records.mjs';
 
 const { Pool } = pg;
@@ -57,6 +58,11 @@ export async function runMigrations(connectionString = process.env.DATABASE_URL)
 
   // After migrations (new tables created), automatically run seeds!
   await runSeeds(connectionString);
+
+  // If Z8_ADMIN_SEED_PASSWORD is set, seed the admin with Firebase + password hash.
+  if (process.env.ADMIN_SEED_EMAIL && process.env.Z8_ADMIN_SEED_PASSWORD) {
+    await runSeedAdmin(connectionString);
+  }
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
