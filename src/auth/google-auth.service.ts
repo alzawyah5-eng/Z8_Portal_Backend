@@ -89,6 +89,13 @@ export class GoogleAuthService {
       if (!record) throw new ForbiddenException({ code: 'user_not_registered' });
     }
 
+    if (record.role === 'admin') {
+      throw new ForbiddenException({
+        code: 'admin_password_required',
+        message: 'Administrator accounts must sign in with email and password.',
+      });
+    }
+
     let firebaseUser;
     if (record.firebase_uid) {
       try {
@@ -209,6 +216,12 @@ export class GoogleAuthService {
   async createFirebaseGoogleSession(principal: FirebasePrincipal) {
     if (principal.sign_in_provider !== 'google.com' || principal.email_verified !== true || !principal.email) {
       throw new ForbiddenException({ code: 'google_account_required', message: 'Sign in with a verified Google account.' });
+    }
+    if (principal.role === 'admin') {
+      throw new ForbiddenException({
+        code: 'admin_password_required',
+        message: 'Administrator accounts must sign in with email and password.',
+      });
     }
     const email = principal.email.trim().toLowerCase();
     const client = await this.db.connect();

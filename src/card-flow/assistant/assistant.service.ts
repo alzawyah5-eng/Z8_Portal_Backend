@@ -101,10 +101,10 @@ export class AssistantService {
     if (!finalText && !toolCalls.length) finalText = 'I could not complete that. Please try again or contact Z8 support.';
     messages.push({ role: 'assistant', content: finalText, tool_calls: toolCalls, created_date: new Date().toISOString(), metadata: { created_date: new Date().toISOString() } });
     if (messages.length > 100) messages.splice(0, messages.length - 100);
-    if (history.length > 120) history.splice(0, history.length - 120);
+    const persistedHistory = this.responsesHistory(row.model_history, messages);
     await this.db.query(
       `UPDATE assistant_conversations SET messages = $2, model_history = $3, updated_at = now()
-       WHERE id = $1`, [id, JSON.stringify(messages), JSON.stringify(history)],
+       WHERE id = $1`, [id, JSON.stringify(messages), JSON.stringify(persistedHistory)],
     );
     return this.get(principal, id);
   }
@@ -139,7 +139,8 @@ export class AssistantService {
       const providerError = payload?.error ?? {};
       const safePart = (value: unknown) => String(value ?? '').replace(/[^a-zA-Z0-9_.:-]/g, '').slice(0, 80) || 'none';
       const requestId = safePart(response.headers.get('x-request-id'));
-      this.logger.error(`GPT Responses API rejected request; status=${response.status}; type=${safePart(providerError.type)}; code=${safePart(providerError.code)}; request_id=${requestId}`);
+      const param = safePart(providerError.param);
+      this.logger.error(`GPT Responses API rejected request; status=${response.status}; type=${safePart(providerError.type)}; code=${safePart(providerError.code)}; param=${param}; request_id=${requestId}`);
       throw new ServiceUnavailableException({ code: 'assistant_unavailable', message: 'The assistant service is temporarily unavailable.' });
     }
     return response.json();
@@ -156,12 +157,9 @@ export class AssistantService {
   }
 
   private responsesHistory(history: any, messages: any[]): any[] {
-    if (Array.isArray(history) && !history.some((item) => item?.parts || item?.content?.parts)) {
-      // Strip any reasoning items that may have been persisted before this fix.
-      return history.filter((item: any) => item?.type !== 'reasoning');
-    }
-    // Existing conversations used the previous model's private history shape.
-    // Rebuild a plain transcript so those conversations survive the provider switch.
+    // Persist a portable transcript instead of replaying raw Responses API
+    // items. Raw tool-call/output pairs can be split by history trimming and
+    // rejected as malformed input on a later request.
     return messages
       .filter((item) => ['user', 'assistant'].includes(item?.role) && typeof item.content === 'string' && item.content.trim())
       .slice(-60)

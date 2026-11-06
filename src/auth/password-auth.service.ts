@@ -383,7 +383,15 @@ export class PasswordAuthService {
         'UPDATE password_reset_codes SET consumed_at = now() WHERE user_id = $1 AND consumed_at IS NULL',
         [userId],
       );
-      this.logger.error('Password reset email delivery failed; reset code invalidated.');
+      const smtpError = error as { code?: unknown; responseCode?: unknown; command?: unknown };
+      const safeCode = typeof smtpError?.code === 'string' && /^[A-Z0-9_-]{1,40}$/i.test(smtpError.code)
+        ? smtpError.code
+        : 'unknown';
+      const responseCode = Number.isInteger(smtpError?.responseCode) ? smtpError.responseCode : 'unknown';
+      const command = typeof smtpError?.command === 'string' && /^[A-Z0-9 _-]{1,40}$/i.test(smtpError.command)
+        ? smtpError.command
+        : 'unknown';
+      this.logger.error(`Password reset email delivery failed; reset code invalidated; smtpCode=${safeCode}; responseCode=${responseCode}; command=${command}.`);
       throw new ServiceUnavailableException({
         code: 'password_reset_unavailable',
         message: 'Password reset email is temporarily unavailable. Contact Z8 support.',
