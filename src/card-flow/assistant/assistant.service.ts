@@ -74,7 +74,9 @@ export class AssistantService {
       const response = await this.generate(config, history);
       const output = Array.isArray(response?.output) ? response.output : [];
       if (!output.length) throw new ServiceUnavailableException({ code: 'assistant_unavailable', message: 'The assistant did not return a response.' });
-      history.push(...output);
+      // Reasoning items contain encrypted content that cannot be replayed.
+      // Only keep message and function_call items in history.
+      history.push(...output.filter((item: any) => item.type !== 'reasoning'));
       const calls = output.filter((item: any) => item.type === 'function_call' && item.name);
       finalText = this.responseText(response).trim();
       if (!calls.length) break;
@@ -154,7 +156,10 @@ export class AssistantService {
   }
 
   private responsesHistory(history: any, messages: any[]): any[] {
-    if (Array.isArray(history) && !history.some((item) => item?.parts || item?.content?.parts)) return history;
+    if (Array.isArray(history) && !history.some((item) => item?.parts || item?.content?.parts)) {
+      // Strip any reasoning items that may have been persisted before this fix.
+      return history.filter((item: any) => item?.type !== 'reasoning');
+    }
     // Existing conversations used the previous model's private history shape.
     // Rebuild a plain transcript so those conversations survive the provider switch.
     return messages
@@ -266,7 +271,7 @@ export class AssistantService {
 
   private async agent(name: string) {
     if (!ALLOWED_AGENTS.has(name)) throw new BadRequestException({ code: 'invalid_agent' });
-    const path = join(__dirname, 'agents', `${name}.jsonc`);
+    const path = join(__dirname, '..', 'agents', `${name}.jsonc`);
     try { return JSON.parse(await readFile(path, 'utf8')); }
     catch { throw new ServiceUnavailableException({ code: 'assistant_not_configured' }); }
   }
