@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Inject, Injectable, Logger, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Pool } from 'pg';
 import { randomUUID } from 'node:crypto';
@@ -20,6 +20,8 @@ const HOLDER_FIELDS = ['id','status','photon_cardholder_id','provider_status','r
 
 @Injectable()
 export class AssistantService {
+  private readonly logger = new Logger(AssistantService.name);
+
   constructor(
     @Inject('PG_POOL') private readonly db: Pool,
     private readonly config: ConfigService,
@@ -110,20 +112,34 @@ export class AssistantService {
     if (!apiKey) throw new ServiceUnavailableException({ code: 'assistant_not_configured', message: 'The assistant is not configured yet.' });
     const model = this.config.get<string>('GPT_AI_MODEL', 'gpt-6-astra').trim();
     const declarations = this.toolDeclarations(agent);
-    const response = await fetch('https://api.openai.com/v1/responses', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({
-        model,
-        instructions: `${agent.instructions}\n\nSecurity rules: Use tools only for the signed-in user's permitted records. Never request or reveal full card numbers, CVVs, credentials, identity-document numbers or private file links. Before any action that changes a card, account, record or provider state, explain it and wait for the user to explicitly confirm in their next message. Never claim an action succeeded unless a tool result confirms it.`,
-        input: history,
-        ...(declarations.length ? { tools: declarations } : {}),
-        max_output_tokens: 1024,
-        reasoning: { effort: this.config.get<string>('GPT_AI_REASONING_EFFORT', 'medium') },
-      }),
-      signal: AbortSignal.timeout(30000),
-    }).catch(() => { throw new ServiceUnavailableException({ code: 'assistant_unavailable', message: 'The assistant service is temporarily unavailable.' }); });
-    if (!response.ok) throw new ServiceUnavailableException({ code: 'assistant_unavailable', message: 'The assistant service is temporarily unavailable.' });
+    let response: Response;
+    try {
+      response = await fetch('https://api.openai.com/v1/responses', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify({
+          model,
+          instructions: `${agent.instructions}\n\nSecurity rules: Use tools only for the signed-in user's permitted records. Never request or reveal full card numbers, CVVs, credentials, identity-document numbers or private file links. Before any action that changes a card, account, record or provider state, explain it and wait for the user to explicitly confirm in their next message. Never claim an action succeeded unless a tool result confirms it.`,
+          input: history,
+          ...(declarations.length ? { tools: declarations } : {}),
+          max_output_tokens: 1024,
+          reasoning: { effort: this.config.get<string>('GPT_AI_REASONING_EFFORT', 'medium') },
+        }),
+        signal: AbortSignal.timeout(30000),
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.name : 'network_error';
+      this.logger.warn(`GPT Responses API request failed before a response; reason=${reason}`);
+      throw new ServiceUnavailableException({ code: 'assistant_unavailable', message: 'The assistant service is temporarily unavailable.' });
+    }
+    if (!response.ok) {
+      const payload: any = await response.json().catch(() => null);
+      const providerError = payload?.error ?? {};
+      const safePart = (value: unknown) => String(value ?? '').replace(/[^a-zA-Z0-9_.:-]/g, '').slice(0, 80) || 'none';
+      const requestId = safePart(response.headers.get('x-request-id'));
+      this.logger.error(`GPT Responses API rejected request; status=${response.status}; type=${safePart(providerError.type)}; code=${safePart(providerError.code)}; request_id=${requestId}`);
+      throw new ServiceUnavailableException({ code: 'assistant_unavailable', message: 'The assistant service is temporarily unavailable.' });
+    }
     return response.json();
   }
 
