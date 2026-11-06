@@ -1,0 +1,14 @@
+﻿.env
+.env.*
+!.env.example
+node_modules/
+dist/
+coverage/
+logs/
+*.log
+*.tsbuildinfo
+secrets/
+service-account*.json
+firebase-adminsdk*.json
+*.pem
+storage/

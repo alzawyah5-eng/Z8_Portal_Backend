@@ -1,0 +1,1 @@
+{ "collection": "@nestjs/schematics", "sourceRoot": "src", "compilerOptions": { "assets": [{ "include": "card-flow/agents/*.jsonc", "outDir": "dist" }, { "include": "card-flow/*.mjs", "outDir": "dist" }] } }
