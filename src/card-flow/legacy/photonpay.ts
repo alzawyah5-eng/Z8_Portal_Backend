@@ -615,6 +615,11 @@ export async function saveTransaction(context, card, body, fallbackType = "") {
         body: `${data.merchant ? `${String(data.merchant).slice(0, 60)}: ` : ""}${usdText(Math.abs(Number(data.amount) || 0))} on ${card.nickname || "your card"}${card.last4 ? ` (•••• ${card.last4})` : ""}.`,
         link: `/cards/${card.id}`, key: `declined:${data.photon_txn_id}`,
       });
+      await notifyAdmins(context, {
+        kind: "payment", tone: "warning", title: "Client card payment declined",
+        body: `${data.merchant ? `${String(data.merchant).slice(0, 60)}: ` : ""}${usdText(Math.abs(Number(data.amount) || 0))} on ${card.nickname || "a client card"}${card.last4 ? ` ending ${card.last4}` : ""}.`,
+        link: `/cards/${card.id}`, key: `admin-declined:${data.photon_txn_id}`,
+      });
     }
     return "created";
   }
@@ -727,6 +732,34 @@ export async function notifyClient(context, email, { kind = "card", tone = "info
   } catch (error) {
     console.log("Notification not written:", String(error?.message || error).slice(0, 200));
     return null;
+  }
+}
+
+// Sends operational events to every active administrator's in-app inbox and
+// registered push devices. Keep the body short and free of identity documents
+// or other verification data; admins can review the protected record in Z8.
+export async function notifyAdmins(context, notification) {
+  if (!notification?.title) return;
+  try {
+    const admins = [];
+    let cursor;
+    do {
+      const page = await context.entities.User.filter(
+        { role: "admin" },
+        { limit: 500, ...(cursor ? { cursor } : {}) },
+      );
+      const rows = Array.isArray(page) ? page : page?.items || [];
+      admins.push(...rows);
+      cursor = Array.isArray(page) ? null : page?.next_cursor || null;
+    } while (cursor);
+
+    const recipients = [...new Set(admins.map((user) => String(user.email || "").trim().toLowerCase()).filter(Boolean))];
+    await Promise.all(recipients.map((email) => notifyClient(context, email, {
+      ...notification,
+      key: notification.key ? `${notification.key}:${email}` : "",
+    })));
+  } catch (error) {
+    console.log("Administrator notification not written:", String(error?.message || error).slice(0, 200));
   }
 }
 

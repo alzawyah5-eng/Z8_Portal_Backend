@@ -5,7 +5,6 @@ import { DatabaseModule } from './database/database.module';
 import { HealthController } from './health.controller';
 import { UsersModule } from './users/users.module';
 import { PhotonPayModule } from './photonpay/photonpay.module';
-import { NotificationsModule } from './notifications/notifications.module';
 import { CardFlowModule } from './card-flow/card-flow.module';
 
 @Module({
@@ -36,7 +35,6 @@ import { CardFlowModule } from './card-flow/card-flow.module';
     AuthModule,
     UsersModule,
     PhotonPayModule,
-    NotificationsModule,
     CardFlowModule,
   ],
   controllers: [HealthController],

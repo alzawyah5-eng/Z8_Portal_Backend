@@ -1,6 +1,6 @@
 // @ts-nocheck
 const secrets = { get: (name) => process.env[name] || '' };
-import { getConfig, getRelayConfig, photonRequest, resolveConfig, pickCard, resolveIssuedCard, photonUpload, maskIdNumber, refreshCardRecord, saveTransaction, unlockIfFunded, notifyClient, notifyHolderChange } from "./photonpay";
+import { getConfig, getRelayConfig, photonRequest, resolveConfig, pickCard, resolveIssuedCard, photonUpload, maskIdNumber, refreshCardRecord, saveTransaction, unlockIfFunded, notifyClient, notifyAdmins, notifyHolderChange } from "./photonpay";
 
 // PhotonPay's openCardHalo issues USD cards only.
 const CURRENCIES = ["USD"];
@@ -850,6 +850,11 @@ export default async function (req, context) {
         await context.entities.CardRequest.delete(created.id).catch(() => null);
         return Response.json({ error: "Your card request is already waiting for approval." }, { status: 409 });
       }
+      await notifyAdmins(context, {
+        kind: "card_request", tone: "info", title: "New card request",
+        body: `${holder.full_name || myEmail} requested a ${TIER_NAMES[tier] || "virtual"} card for ${amount.toFixed(2)} USD.`,
+        link: "/cards", key: `admin-card-request:${created.id}`,
+      });
       return Response.json({ request: publicCardRequest(created), card_request: await cardRequestState(context, holder) });
     }
 
@@ -861,6 +866,11 @@ export default async function (req, context) {
       }
       if (row.status !== "pending") return Response.json({ error: `This request is already ${row.status}.` }, { status: 409 });
       await context.entities.CardRequest.update(row.id, { status: "cancelled", reviewed_at: new Date().toISOString() });
+      await notifyAdmins(context, {
+        kind: "card_request", tone: "warning", title: "Card request cancelled",
+        body: `${row.client_name || myEmail} cancelled a pending request for ${round2(row.amount).toFixed(2)} USD.`,
+        link: "/cards", key: `admin-card-request-cancelled:${row.id}`,
+      });
       return Response.json({ ok: true, card_request: await cardRequestState(context, holder) });
     }
 
@@ -895,6 +905,11 @@ export default async function (req, context) {
         owner_email: myEmail, client_name: holder.full_name || user.full_name || "", kind: "deposit", status: "pending",
         amount, reported_amount: amount, method, reference: clean(input.reference, 120), note: clean(input.note, 300), reported_by: "client",
         ...proof,
+      });
+      await notifyAdmins(context, {
+        kind: "funds", tone: "info", title: "Deposit reported",
+        body: `${holder.full_name || myEmail} reported ${amount.toFixed(2)} USD by ${method.replaceAll("_", " ")}. Review it under Client funds.`,
+        link: "/admin/funds", key: `admin-deposit-reported:${created.id}`,
       });
       return Response.json({ entry: publicEntry(created) });
     }
@@ -1100,6 +1115,11 @@ export default async function (req, context) {
         // No device address is recorded here: the only one a client could
         // supply is caller-claimed, and PhotonPay risk input must not be.
         device_ip: "", device_country: deviceCountry,
+      });
+      await notifyAdmins(context, {
+        kind: "verification", tone: "info", title: "Identity verification submitted",
+        body: `${fields.firstName} ${fields.lastName} submitted identity details for review.`,
+        link: "/cardholders", key: `admin-application-submitted:${created.id}`,
       });
       return Response.json({ application: publicApplication(created) });
     }
@@ -1656,6 +1676,12 @@ export default async function (req, context) {
         // A client sees their own top-up on screen; one made for them is announced.
         if (admin) {
           await notifyClient(context, record.owner_email, { kind: "card", tone: "success", title: "Credit added to your card", body: `${round2(result.arrivalAmount ?? charged).toFixed(2)} USD added to ${record.nickname || "your card"}${record.last4 ? ` (•••• ${record.last4})` : ""}.`, link: `/cards/${record.id}`, key: `topup:${quoteId}` });
+        } else {
+          await notifyAdmins(context, {
+            kind: "card", tone: "info", title: "Client added credit to a card",
+            body: `${round2(result.arrivalAmount ?? charged).toFixed(2)} USD added to ${record.nickname || "a client card"}${record.last4 ? ` ending ${record.last4}` : ""}.`,
+            link: `/cards/${record.id}`, key: `admin-topup:${quoteId}`,
+          });
         }
       }
       const wasLocked = Boolean(record.auto_issued && !record.funded_at);
@@ -1680,6 +1706,13 @@ export default async function (req, context) {
         card_nickname: record.nickname, amount: 0, currency: record.currency, status: "completed",
         occurred_at: new Date().toISOString(), owner_email: record.owner_email || "", note: "CVV unblocked",
       });
+      if (!admin) {
+        await notifyAdmins(context, {
+          kind: "card", tone: "info", title: "Client unblocked a card CVV",
+          body: `${record.cardholder_name || record.owner_email || "A client"} unblocked the CVV for ${record.nickname || "a card"}${record.last4 ? ` ending ${record.last4}` : ""}.`,
+          link: `/cards/${record.id}`, key: `admin-cvv-unblocked:${record.id}:${Date.now()}`,
+        });
+      }
       return Response.json({ ok: true });
     }
 

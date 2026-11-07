@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { notifyAdmins } from "./photonpay";
 
 export default async function (req, context) {
   try {
@@ -21,15 +22,24 @@ export default async function (req, context) {
       return Response.json({ error: "Confirm the account email to continue" }, { status: 400 });
     }
 
-    // Release every card and piece of activity assigned to this account before
-    // the account itself is removed, so nothing is left pointing at a gone user.
-    const query = { owner_email: user.email };
-    await context.entities.Card.updateMany(query, { $set: { owner_email: "" } });
-    await context.entities.CardTransaction.updateMany(query, { $set: { owner_email: "" } });
-    await context.entities.User.delete(user.id);
+    const closedAccount = await context.accounts.close(user.id);
+    if (user.role === "user") {
+      await notifyAdmins(context, {
+        kind: "account", tone: "warning", title: "A client closed their account",
+        body: `The client account ${user.email} was closed.`,
+        link: "/cardholders", key: `admin-account-deleted:${closedAccount.id}`,
+      }).catch(() => undefined);
+    }
 
     return Response.json({ ok: true });
   } catch (error) {
-    return Response.json({ error: error.message }, { status: 500 });
+    const response = typeof error?.getResponse === "function" ? error.getResponse() : null;
+    const message = typeof response === "string"
+      ? response
+      : response?.message || error.message || "Account closure could not be completed.";
+    return Response.json({
+      error: Array.isArray(message) ? message.join(", ") : String(message),
+      ...(response?.code ? { code: response.code } : {}),
+    }, { status: Number(error?.status) || 500 });
   }
 }

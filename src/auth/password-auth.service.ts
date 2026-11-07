@@ -14,6 +14,7 @@ import { randomBytes, randomInt, createHmac, timingSafeEqual } from 'node:crypto
 import * as argon2 from 'argon2';
 import nodemailer from 'nodemailer';
 import { Pool } from 'pg';
+import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
 export class PasswordAuthService {
@@ -24,6 +25,7 @@ export class PasswordAuthService {
     @Inject('PG_POOL') private readonly db: Pool,
     @Inject('FIREBASE_AUTH') private readonly firebaseAuth: Auth,
     private readonly config: ConfigService,
+    private readonly notifications: NotificationsService,
   ) {
     this.resetPepper = config.get<string>('PASSWORD_RESET_PEPPER', '');
   }
@@ -179,6 +181,9 @@ export class PasswordAuthService {
       throw error;
     } finally {
       client.release();
+    }
+    if (user!.role === 'user') {
+      await this.notifications.notifyAdminsOfNewAccount(user!.id);
     }
     return this.issueFirebaseSession(user!.firebase_uid, user!.role, email);
   }

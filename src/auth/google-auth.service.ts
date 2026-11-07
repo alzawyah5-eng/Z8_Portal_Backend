@@ -4,6 +4,7 @@ import { Auth } from 'firebase-admin/auth';
 import { OAuth2Client } from 'google-auth-library';
 import { Pool } from 'pg';
 import { FirebasePrincipal } from './firebase-principal';
+import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
 export class GoogleAuthService {
@@ -15,6 +16,7 @@ export class GoogleAuthService {
     @Inject('PG_POOL') private readonly db: Pool,
     @Inject('FIREBASE_AUTH') private readonly firebaseAuth: Auth,
     config: ConfigService,
+    private readonly notifications: NotificationsService,
   ) {
     const serverClientId = config.getOrThrow<string>('FIREBASE_GOOGLE_SERVER_CLIENT_ID');
     const configuredAudiences = [
@@ -63,6 +65,7 @@ export class GoogleAuthService {
       [email],
     );
     let record = result.rows[0];
+    let newlyRegistered = false;
     this.logger.log(
       record ? `PostgreSQL account found; role=${record.role}.` : 'No PostgreSQL account found; registering as role=user.',
     );
@@ -77,7 +80,10 @@ export class GoogleAuthService {
         [email, payload?.name ?? null],
       );
       record = created.rows[0];
-      if (record) this.logger.log('New Google account registered in PostgreSQL with role=user.');
+      if (record) {
+        newlyRegistered = true;
+        this.logger.log('New Google account registered in PostgreSQL with role=user.');
+      }
       if (!record) {
         result = await this.db.query(
           `SELECT id, firebase_uid, email, role
@@ -209,6 +215,9 @@ export class GoogleAuthService {
       firebaseUser.uid,
       { admin: record.role === 'admin', role: record.role },
     );
+    if (newlyRegistered && record.role === 'user') {
+      await this.notifications.notifyAdminsOfNewAccount(record.id);
+    }
     this.logger.log(`Google session created successfully; role=${record.role}.`);
     return { firebaseCustomToken, email, displayName: payload?.name ?? null, role: record.role };
   }

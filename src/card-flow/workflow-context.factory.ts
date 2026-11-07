@@ -37,13 +37,7 @@ export class LocalWorkflowContextFactory {
         update: (id: string, data: any) => entity === 'PhotonPayToken'
           ? this.records.savePhotonPayToken(data)
           : this.records.update(entity, id, data, principal, true),
-        delete: async (id: string) => {
-          const result = await this.records.remove(entity, id, principal, true);
-          if (entity === 'User' && result.firebaseUid) {
-            await this.auth.deleteUser(result.firebaseUid).catch(() => undefined);
-          }
-          return result;
-        },
+        delete: (id: string) => this.records.remove(entity, id, principal, true),
         updateMany: (filter: any, update: any) => this.records.updateMany(entity, filter, update, principal, true),
       };
     }
@@ -63,6 +57,24 @@ export class LocalWorkflowContextFactory {
         },
       },
       entities,
+      accounts: {
+        close: async (firebaseUid: string) => {
+          const result = await this.records.closeUserAccount(firebaseUid);
+          try {
+            await this.auth.deleteUser(result.firebaseUid);
+          } catch {
+            // The PostgreSQL tombstone blocks app access. Disable the Firebase
+            // identity as a fallback if permanent provider cleanup is unavailable.
+            try {
+              await this.auth.updateUser(result.firebaseUid, { disabled: true });
+              await this.auth.revokeRefreshTokens(result.firebaseUid);
+            } catch {
+              // Keep the database tombstone authoritative while Firebase recovers.
+            }
+          }
+          return result;
+        },
+      },
       files: {
         uploadPrivateFile: ({ file }: { file: File }) => this.files.uploadPrivateFile(file),
         createSignedUrl: ({ file_uri, expires_in }: { file_uri: string; expires_in: number }) =>

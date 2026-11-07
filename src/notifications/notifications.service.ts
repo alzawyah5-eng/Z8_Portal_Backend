@@ -1,6 +1,13 @@
-import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Messaging } from 'firebase-admin/messaging';
 import { Pool } from 'pg';
+import { randomUUID } from 'node:crypto';
+import {
+  encryptSensitiveRecordFields,
+  ownerEmailLookupHash,
+  parseRecordPiiKey,
+} from '../card-flow/record-pii-crypto';
 
 @Injectable()
 export class NotificationsService {
@@ -9,25 +16,60 @@ export class NotificationsService {
   constructor(
     @Inject('PG_POOL') private readonly db: Pool,
     @Inject('FIREBASE_MESSAGING') private readonly messaging: Messaging,
+    private readonly config: ConfigService,
   ) {}
 
-  async sendTestToUser(firebaseUid: string) {
-    const user = await this.db.query(
-      'SELECT 1 FROM app_users WHERE firebase_uid = $1',
-      [firebaseUid],
-    );
-    if (!user.rowCount) throw new NotFoundException({ code: 'user_not_registered' });
-    this.logger.log('User requested a push test; sending immediately.');
-    const result = await this.sendToUser(
-      firebaseUid,
-      'Z8 notifications are connected',
-      'Your device can receive Z8 alerts.',
-      { type: 'notification_test' },
-    );
-    this.logger.log(
-      `Push test finished; registeredDevices=${result.deviceCount}, acceptedByFcm=${result.sent}.`,
-    );
-    return result;
+  async notifyAdminsOfNewAccount(userId: string) {
+    try {
+      const key = parseRecordPiiKey(
+        this.config.get<string>('RECORD_PII_ENCRYPTION_KEY', ''),
+      );
+      const admins = await this.db.query(
+        `SELECT email FROM app_users
+         WHERE role = 'admin' AND deleted_at IS NULL AND email IS NOT NULL
+         ORDER BY created_at`,
+      );
+      for (const row of admins.rows) {
+        const email = String(row.email).trim().toLowerCase();
+        if (!email) continue;
+        try {
+          const dedupeKey = `admin-new-account:${userId}:${email}`;
+          const data = encryptSensitiveRecordFields('Notification', {
+            owner_email: email,
+            kind: 'account',
+            tone: 'info',
+            title: 'New client account created',
+            body: 'A new client completed sign-up and can now submit identity verification.',
+            link: '/cardholders',
+            dedupe_key: dedupeKey,
+            read: false,
+          }, key);
+          const inserted = await this.db.query(
+            `INSERT INTO notifications (id, data, owner_email_hash)
+             VALUES ($1, $2::jsonb, $3)
+             ON CONFLICT DO NOTHING
+             RETURNING id`,
+            [randomUUID(), JSON.stringify(data), ownerEmailLookupHash(email, key)],
+          );
+          if (inserted.rowCount) {
+            await this.sendToEmail(
+              email,
+              'New client account created',
+              'A new client completed sign-up and can now submit identity verification.',
+              { type: 'account', link: '/cardholders' },
+            );
+          }
+        } catch (error) {
+          this.logger.warn(
+            `New-account notification failed for one administrator; code=${this.errorCode(error)}.`,
+          );
+        }
+      }
+    } catch (error) {
+      this.logger.warn(
+        `New-account admin notification was not delivered; code=${this.errorCode(error)}.`,
+      );
+    }
   }
 
   async sendToEmail(email: string, title: string, body: string, data: Record<string, string> = {}) {
@@ -74,5 +116,11 @@ export class NotificationsService {
       if (response.failureCount) this.logger.warn(`FCM delivery failures: ${response.failureCount}`);
     }
     return { deviceCount: tokens.length, sent };
+  }
+
+  private errorCode(error: unknown): string {
+    return error && typeof error === 'object' && 'code' in error
+      ? String((error as { code: unknown }).code).slice(0, 80)
+      : 'notification_failed';
   }
 }

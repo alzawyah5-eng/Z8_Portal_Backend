@@ -12,6 +12,7 @@ import { GoogleAuthService } from './google-auth.service';
 import { PasswordAuthController } from './password-auth.controller';
 import { PasswordAuthService } from './password-auth.service';
 import { LegacyPasswordMigrationGuard } from './legacy-password-migration.guard';
+import { NotificationsService } from '../notifications/notifications.service';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -54,8 +55,9 @@ const logger = new Logger('AuthModule');
     GoogleAuthService,
     PasswordAuthService,
     LegacyPasswordMigrationGuard,
+    NotificationsService,
   ],
-  exports: ['FIREBASE_AUTH', 'FIREBASE_MESSAGING', FirebaseAuthGuard, AdminGuard, LegacyPasswordMigrationGuard],
+  exports: ['FIREBASE_AUTH', 'FIREBASE_MESSAGING', FirebaseAuthGuard, AdminGuard, LegacyPasswordMigrationGuard, NotificationsService],
 })
 @Global()
 export class AuthModule {}

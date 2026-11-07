@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException, Inject, ServiceUnavailableException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, Inject, ServiceUnavailableException } from '@nestjs/common';
 import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { ConfigService } from '@nestjs/config';
@@ -178,7 +178,7 @@ export class CardFlowEntitiesService {
 
     const params: unknown[] = [];
     const clauses = this.filterClauses(entity, filter, params);
-    if (!internal && principal?.role !== 'admin') {
+    if (!internal && (entity === 'Notification' || principal?.role !== 'admin')) {
       if (!principal?.email) throw new ForbiddenException('Verified account access is required.');
       params.push(this.ownerEmailHash(principal.email));
       clauses.push(`owner_email_hash = $${params.length}`);
@@ -222,7 +222,7 @@ export class CardFlowEntitiesService {
     }
     const params: unknown[] = [];
     const clauses = this.filterClauses(entity, filter, params);
-    if (!internal && principal?.role !== 'admin') {
+    if (!internal && (entity === 'Notification' || principal?.role !== 'admin')) {
       params.push(this.ownerEmailHash(principal?.email));
       clauses.push(`owner_email_hash = $${params.length}`);
     }
@@ -241,7 +241,7 @@ export class CardFlowEntitiesService {
     }
     const params: unknown[] = [id];
     let scope = '';
-    if (!internal && principal?.role !== 'admin') {
+    if (!internal && (entity === 'Notification' || principal?.role !== 'admin')) {
       params.push(this.ownerEmailHash(principal?.email));
       scope = ` AND owner_email_hash = $${params.length}`;
     }
@@ -327,10 +327,11 @@ export class CardFlowEntitiesService {
     if (!internal) this.authorize(entity, 'update', principal);
     const clearChanges = this.sanitize(entity, patch, false);
     const changes = this.encryptSensitiveFields(entity, clearChanges);
-    if (!internal && principal?.role !== 'admin') {
-      if (entity !== 'Notification') throw new ForbiddenException('This record cannot be changed by this account.');
+    if (!internal && entity === 'Notification') {
       const keys = Object.keys(changes);
       if (keys.some((key) => !['read', 'read_at'].includes(key))) throw new ForbiddenException('Only notification read state can be changed.');
+    } else if (!internal && principal?.role !== 'admin') {
+      throw new ForbiddenException('This record cannot be changed by this account.');
     }
     if (entity === 'User') {
       if (!internal && principal?.role !== 'admin') throw new ForbiddenException();
@@ -353,7 +354,7 @@ export class CardFlowEntitiesService {
       ? this.cardholderEmailHash(clearChanges.email)
       : null);
     let scope = '';
-    if (!internal && principal?.role !== 'admin') {
+    if (!internal && (entity === 'Notification' || principal?.role !== 'admin')) {
       params.push(this.ownerEmailHash(principal?.email));
       scope = ` AND owner_email_hash = $${params.length}`;
     }
@@ -415,7 +416,7 @@ export class CardFlowEntitiesService {
       protectedClauses.push(`${field === 'owner_email' ? 'owner_email_hash' : 'cardholder_email_hash'} = $${params.length}`);
     }
     let ownerScope = '';
-    if (!internal && principal?.role !== 'admin') {
+    if (!internal && (entity === 'Notification' || principal?.role !== 'admin')) {
       if (entity !== 'Notification' || Object.keys(changes).some((key) => !['read', 'read_at'].includes(key))) {
         throw new ForbiddenException('This account cannot perform that operation.');
       }
@@ -448,38 +449,87 @@ export class CardFlowEntitiesService {
 
   async remove(entity: string, id: string, principal?: FirebasePrincipal, internal = false) {
     this.assertEntity(entity);
+    if (entity === 'User') {
+      throw new ForbiddenException('Use the confirmed account closure action to remove an account.');
+    }
     if (!SAFE_ID.test(id)) throw new BadRequestException({ code: 'invalid_record_id' });
     if (!internal) this.authorize(entity, 'delete', principal);
-    if (entity === 'User') {
-      const client = await this.db.connect();
-      try {
-        await client.query('BEGIN');
-        const found = await client.query('SELECT id, firebase_uid FROM app_users WHERE id::text = $1 OR firebase_uid = $1 FOR UPDATE', [id]);
-        if (!found.rowCount) throw new NotFoundException({ code: 'record_not_found' });
-        const accountId = found.rows[0].id;
-        const uid = found.rows[0].firebase_uid;
-        await client.query('DELETE FROM user_devices WHERE user_id = $1', [accountId]);
-        await client.query(
-          `UPDATE app_users SET deleted_at = now(), firebase_uid = 'deleted:' || id::text,
-             email = NULL, email_verified = false, display_name = NULL, password_hash = NULL,
-             role = 'user', updated_at = now() WHERE id = $1`, [accountId],
-        );
-        await client.query('COMMIT');
-        return { deleted: true, firebaseUid: uid };
-      } catch (error) {
-        try { await client.query('ROLLBACK'); } catch { /* transaction already ended */ }
-        throw error;
-      } finally { client.release(); }
-    }
     const params: unknown[] = [id];
     let scope = '';
-    if (!internal && principal?.role !== 'admin') {
+    if (!internal && (entity === 'Notification' || principal?.role !== 'admin')) {
       params.push(this.ownerEmailHash(principal?.email));
       scope = ` AND owner_email_hash = $${params.length}`;
     }
     const result = await this.db.query(`DELETE FROM ${this.tableFor(entity)} WHERE id = $1${scope} RETURNING id`, params);
     if (!result.rowCount) throw new NotFoundException({ code: 'record_not_found' });
     return { deleted: true };
+  }
+
+  async closeUserAccount(firebaseUid: string) {
+    const client = await this.db.connect();
+    try {
+      await client.query('BEGIN');
+      const result = await client.query(
+        `SELECT id, firebase_uid, email, role FROM app_users
+         WHERE firebase_uid = $1 AND deleted_at IS NULL`,
+        [firebaseUid],
+      );
+      if (!result.rowCount) throw new NotFoundException({ code: 'user_not_registered' });
+      let account = result.rows[0];
+
+      if (account.role === 'admin') {
+        // Lock active admin rows in the same transaction so two admins cannot
+        // concurrently close accounts and leave the programme without one.
+        const admins = await client.query(
+          `SELECT id FROM app_users WHERE role = 'admin' AND deleted_at IS NULL ORDER BY id FOR UPDATE`,
+        );
+        if ((admins.rowCount ?? admins.rows.length) <= 1) {
+          throw new ConflictException({
+            code: 'last_admin_account',
+            message: 'Add another active administrator before deleting the only admin account.',
+          });
+        }
+      }
+
+      const lockedAccount = await client.query(
+        `SELECT id, firebase_uid, email, role FROM app_users
+         WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`,
+        [account.id],
+      );
+      if (!lockedAccount.rowCount) throw new NotFoundException({ code: 'user_not_registered' });
+      account = lockedAccount.rows[0];
+
+      const ownerHash = this.ownerEmailHash(String(account.email ?? ''));
+      if (ownerHash) {
+        for (const table of ['cards', 'card_transactions']) {
+          await client.query(
+            `UPDATE ${table} SET data = jsonb_set(data, '{owner_email}', '""'::jsonb, true),
+               owner_email_hash = NULL, updated_at = now() WHERE owner_email_hash = $1`,
+            [ownerHash],
+          );
+        }
+        await client.query('DELETE FROM notifications WHERE owner_email_hash = $1', [ownerHash]);
+      }
+      await client.query('DELETE FROM user_devices WHERE user_id = $1', [account.id]);
+      await client.query(
+        `UPDATE app_users SET deleted_at = now(), firebase_uid = 'deleted:' || id::text,
+           email_verified = false, display_name = NULL, password_hash = NULL,
+           role = 'user', updated_at = now() WHERE id = $1`,
+        [account.id],
+      );
+      await client.query('COMMIT');
+      return {
+        id: account.id,
+        firebaseUid: account.firebase_uid,
+        email: account.email,
+        role: account.role,
+      };
+    } catch (error) {
+      try { await client.query('ROLLBACK'); } catch { /* transaction already ended */ }
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   private async filterUsers(filter: Record<string, unknown>, options: EntityOptions, principal?: FirebasePrincipal, internal = false) {
