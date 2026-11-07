@@ -77,6 +77,8 @@ export class LocalWorkflowContextFactory {
       },
       files: {
         uploadPrivateFile: ({ file }: { file: File }) => this.files.uploadPrivateFile(file),
+        readPrivateFile: (file_uri: string) => this.files.readPrivateFile(file_uri),
+        deletePrivateFile: (file_uri: string) => this.files.deletePrivateFile(file_uri),
         createSignedUrl: ({ file_uri, expires_in }: { file_uri: string; expires_in: number }) =>
           this.files.createSignedUrl(file_uri, expires_in),
       },

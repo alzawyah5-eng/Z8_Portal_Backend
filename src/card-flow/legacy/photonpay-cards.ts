@@ -1321,8 +1321,8 @@ export default async function (req, context) {
     }
 
     if (action === "upload_id_image") {
-      // One ID photo for cardholder registration, sent straight to PhotonPay.
-      // Z8 keeps only the returned file key, never the image.
+      // Stage the upload in private file storage before forwarding it to PhotonPay.
+      // The temporary Z8 copy is removed after the provider accepts or rejects it.
       const mimeType = clean(input.mimeType, 20).toLowerCase();
       if (!["image/jpeg", "image/png"].includes(mimeType)) {
         return Response.json({ error: "ID photos must be JPG or PNG." }, { status: 400 });
@@ -1335,9 +1335,24 @@ export default async function (req, context) {
       const jpeg = bytes[0] === 0xff && bytes[1] === 0xd8;
       const png = bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47;
       if (!(jpeg || png)) return Response.json({ error: "The file is not a JPG or PNG image." }, { status: 400 });
-      const fileKey = await photonUpload(live, "issuing_cardholder_identity_certificate", bytes,
-        clean(input.fileName, 80) || (png ? "id.png" : "id.jpg"), png ? "image/png" : "image/jpeg");
-      return Response.json({ file_key: fileKey });
+      const kind = png ? "image/png" : "image/jpeg";
+      const fileName = clean(input.fileName, 80) || (png ? "id.png" : "id.jpg");
+      const { file_uri: fileUri } = await context.files.uploadPrivateFile({
+        file: new File([bytes], fileName, { type: kind }),
+      });
+      try {
+        const stored = await context.files.readPrivateFile(fileUri);
+        const fileKey = await photonUpload(
+          live,
+          "issuing_cardholder_identity_certificate",
+          stored.bytes,
+          fileName,
+          kind,
+        );
+        return Response.json({ file_key: fileKey });
+      } finally {
+        await context.files.deletePrivateFile(fileUri);
+      }
     }
 
     if (action === "add_holder") {
