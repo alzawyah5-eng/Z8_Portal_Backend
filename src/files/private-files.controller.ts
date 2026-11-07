@@ -1,5 +1,7 @@
-import { Controller, Get, Param, Query, Res } from '@nestjs/common';
+import { Controller, Get, Param, Query, Res, UseGuards } from '@nestjs/common';
 import { Response } from 'express';
+import { AdminGuard } from '../auth/admin.guard';
+import { FirebaseAuthGuard } from '../auth/firebase-auth.guard';
 import { PrivateFileStorageService } from './private-file-storage.service';
 
 @Controller('files/private')
@@ -7,6 +9,7 @@ export class PrivateFilesController {
   constructor(private readonly files: PrivateFileStorageService) {}
 
   @Get(':fileId/:fileName')
+  @UseGuards(FirebaseAuthGuard, AdminGuard)
   async getFile(
     @Param('fileId') fileId: string,
     @Param('fileName') fileName: string,

@@ -209,7 +209,7 @@ export class AssistantService {
     if (!fnConfig) throw new ForbiddenException('This assistant cannot call that operation.');
     if (name === 'photonpayCards') {
       const action = String(args.action ?? '');
-      if (!/^(status|bins|balance|list|detail|refresh|my_registration|my_wallet|my_deposit_proof|wallet_overview|wallet_client|application_photo)$/.test(action)) this.requireConfirmation(previousMessages);
+      if (!/^(status|bins|balance|list|detail|refresh|my_registration|my_wallet|wallet_overview|wallet_client|application_photo)$/.test(action)) this.requireConfirmation(previousMessages);
       const payload = this.parseObject(args.payload_json);
       return this.callFunction(photonpayCards, principal, { action, payload });
     }

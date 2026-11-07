@@ -23,13 +23,19 @@ Set these in `Backend_z8-card-flow/.env`:
 PRIVATE_FILES_STORAGE=s3
 AWS_REGION=eu-north-1
 AWS_PROFILE=z8-uploads
-S3_BUCKET=your-exact-created-bucket-name
+S3_BUCKET=z8-uploads
+PRIVATE_FILE_ENCRYPTION_KEY=<keep the existing value in .env>
+PRIVATE_FILE_SIGNING_KEY=<keep the existing value in .env>
 ```
 
 Keep the existing `PRIVATE_FILE_ENCRYPTION_KEY` and
 `PRIVATE_FILE_SIGNING_KEY` stable. Uploaded file contents are encrypted by the
 backend before they are written to S3; S3 also applies the bucket's default
 encryption. Do not change or regenerate these keys after uploads exist.
+
+`z8-uploads` is the bucket name currently configured in the local `.env`; use
+the exact name shown in the S3 console if AWS changed it or you created a
+different name. `eu-north-1` is Stockholm and must match the bucket's region.
 
 The AWS SDK uses its standard credential chain. In production, attach a role to
 the backend workload. For local development, use a dedicated IAM identity and

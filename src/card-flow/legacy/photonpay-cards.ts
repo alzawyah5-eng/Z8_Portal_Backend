@@ -741,7 +741,7 @@ export default async function (req, context) {
     // Administrator-only actions that act on one local card record.
     const adminCardActions = ["update_card", "sandbox_txn"];
     const selfActions = ["submit_registration", "my_registration", "request_card", "cancel_card_request", "store_id_photo", "my_wallet", "report_deposit",
-      "store_deposit_proof", "my_deposit_proof"];
+      "store_deposit_proof"];
     if (!adminActions.includes(action) && !cardActions.includes(action) && !selfActions.includes(action)) {
       return Response.json({ error: "Unsupported action" }, { status: 400 });
     }
@@ -1051,11 +1051,10 @@ export default async function (req, context) {
       return Response.json({ proof_token: proofToken, type: kind });
     }
 
-    if (action === "my_deposit_proof" || action === "deposit_proof") {
-      // A short-lived link to a deposit's proof: the client sees only their own.
+    if (action === "deposit_proof") {
+      // Deposit proofs contain sensitive financial information and are admin-only.
       const entry = await context.entities.AccountEntry.get(clean(input.entryId, 64)).catch(() => null);
-      const own = entry && String(entry.owner_email || "").toLowerCase() === myEmail;
-      if (!entry || (action === "my_deposit_proof" && !own) || !entry.proof_file_uri || !PROOF_FILE.test(entry.proof_file_uri)) {
+      if (!entry || !entry.proof_file_uri || !PROOF_FILE.test(entry.proof_file_uri)) {
         return Response.json({ error: "No proof of payment for this deposit." }, { status: 404 });
       }
       const { signed_url: url } = await context.files.createSignedUrl({ file_uri: entry.proof_file_uri, expires_in: 300 });

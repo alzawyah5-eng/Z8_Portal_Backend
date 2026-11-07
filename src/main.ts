@@ -12,7 +12,15 @@ async function bootstrap(): Promise<void> {
     .split(',')
     .map((value) => value.trim())
     .filter(Boolean);
-  if (trustedProxyCidrs.length) app.getHttpAdapter().getInstance().set('trust proxy', trustedProxyCidrs);
+  const expressInstance = app.getHttpAdapter().getInstance();
+  if (trustedProxyCidrs.length) {
+    expressInstance.set('trust proxy', trustedProxyCidrs);
+  } else if (process.env.NODE_ENV !== 'production') {
+    // Local tunnels (for example ngrok) connect to the development server
+    // from this machine and forward the original client IP in X-Forwarded-For.
+    // Trust loopback only; never use `true` or a hop count for this setup.
+    expressInstance.set('trust proxy', 'loopback');
+  }
   app.use(express.json({
     limit: '13mb',
     verify: (request, _response, buffer) => {
